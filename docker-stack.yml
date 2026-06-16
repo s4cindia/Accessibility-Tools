@@ -41,8 +41,8 @@ services:
 
   app:
     # Published by .github/workflows/build-and-publish.yml. Override APP_IMAGE to
-    # pin a specific build, e.g. ghcr.io/s4cindia/smart-document-editor:main-<sha>.
-    image: ${APP_IMAGE:-ghcr.io/s4cindia/smart-document-editor:latest}
+    # pin a specific build, e.g. ghcr.io/s4cindia/accessibility-tools:main-<sha>.
+    image: ${APP_IMAGE:-ghcr.io/s4cindia/accessibility-tools:latest}
     ports:
       # Published via the Swarm routing mesh: reachable on any node's IP at :5000.
       - "5000:5000"

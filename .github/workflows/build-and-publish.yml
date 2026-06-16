@@ -24,8 +24,8 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   # GHCR requires a lowercase path. The owner (s4cindia) is already lowercase;
-  # the image name is fixed to match the name used in docker-stack.yml.
-  IMAGE_NAME: ${{ github.repository_owner }}/smart-document-editor
+  # the image name matches the repo (Accessibility-Tools) and docker-stack.yml.
+  IMAGE_NAME: ${{ github.repository_owner }}/accessibility-tools
 
 jobs:
   build-and-push:
