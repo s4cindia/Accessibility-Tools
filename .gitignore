@@ -11,6 +11,12 @@ venv/
 # Environment Variables
 .env
 
+# TLS material — generated per-server, NEVER commit the private key
+certs/
+**/certs/
+*.key
+*.crt
+
 # Database
 *.db
 

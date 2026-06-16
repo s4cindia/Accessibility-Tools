@@ -1,0 +1,76 @@
+name: Build & publish image to GHCR
+
+# Builds the app image and pushes it to the GitHub Container Registry so any
+# node (e.g. the Swarm cluster in docker-stack.yml) can pull a pre-built image
+# instead of building locally.
+#
+#   * push to main            -> publishes :latest  + :main-<sha>
+#   * push of a vX.Y.Z tag    -> publishes :X.Y.Z + :X.Y + :latest (semver)
+#   * pull_request            -> builds only (no push) to catch broken Dockerfiles
+#   * manual (workflow_dispatch)
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Don't pile up image builds for the same ref; a newer push supersedes an older.
+concurrency:
+  group: ghcr-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR requires a lowercase path. The owner (s4cindia) is already lowercase;
+  # the image name is fixed to match the name used in docker-stack.yml.
+  IMAGE_NAME: ${{ github.repository_owner }}/smart-document-editor
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # checkout
+      packages: write      # push to GHCR
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Skipped on pull_request events (login not needed for a build-only run).
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags & labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=main-,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          # Don't push on PRs — just verify the image builds.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
