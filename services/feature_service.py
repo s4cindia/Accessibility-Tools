@@ -32,7 +32,7 @@ from services.excel_service import read_sheet
 TEMPLATE_DIR = config.data_dir / "templates"
 WCAG_TEMPLATE = TEMPLATE_DIR / "Template_WCAG_Audit.xlsx"
 # Separate template used ONLY by Placeholder 3's "Export using delivery template".
-WCAG_DELIVERY_TEMPLATE = TEMPLATE_DIR / "Template_WCAG_Delivery.xlsx"
+WCAG_DELIVERY_TEMPLATE = TEMPLATE_DIR / "Template_WCAG_Delivery_1.3.xlsx"
 # Boilerplate used ONLY by Placeholder 3's "Import Digital Asset": three audit
 # rows (Word, PDF, PowerPoint) in the 23-column format. The static A–W values
 # are read from this file — never hardcoded.

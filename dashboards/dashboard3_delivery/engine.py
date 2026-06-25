@@ -268,15 +268,17 @@ def _fill_delivery(audit: pl.DataFrame, out: Path, title: str = "",
     from openpyxl import load_workbook
     wb = load_workbook(WCAG_DELIVERY_TEMPLATE)
 
-    # ---- Sheet 2: "All Issues" — map the audit's first 16 columns (A–P)
-    # POSITIONALLY into the template's A–P. The audit's A–P line up with the
-    # delivery A–P; only column C differs in label (audit "Issue Category" vs
+    # ---- Sheet 2: "All Issues" — map the audit's first 12 columns (A–L)
+    # POSITIONALLY into the template's A–L. The audit's A–L line up with the
+    # delivery A–L; only column C differs in label (audit "Issue Category" vs
     # template "Issue Type") — same position — so by-name mapping would wrongly
     # pull the audit's separate "Issue Type" (col R) into C. Positional is right.
+    # (Delivery template 1.3 trimmed sheet 2 from A–P to A–L.)
+    DELIVERY_COLS = 12                            # delivery sheet 2 = A–L only
     issues = next((wb[n] for n in wb.sheetnames
                    if "all issues" in n.lower() or n.strip().startswith("2")), None)
     if issues is not None:
-        n_tgt = min(issues.max_column or 0, 16)   # delivery sheet 2 = A–P only
+        n_tgt = min(issues.max_column or 0, DELIVERY_COLS)
         src_cols = list(audit.columns)            # 23 audit columns, in order
         rows = audit.to_dicts()
         start = 2
@@ -288,73 +290,76 @@ def _fill_delivery(audit: pl.DataFrame, out: Path, title: str = "",
         for rr in range(start + len(rows), (issues.max_row or 0) + 1):
             for cc in range(1, (issues.max_column or 0) + 1):
                 issues.cell(rr, cc).value = None
-        # ensure nothing exists beyond column P (16)
-        if (issues.max_column or 0) > 16:
-            issues.delete_cols(17, (issues.max_column or 16) - 16)
+        # ensure nothing exists beyond column L (12)
+        if (issues.max_column or 0) > DELIVERY_COLS:
+            issues.delete_cols(DELIVERY_COLS + 1,
+                               (issues.max_column or DELIVERY_COLS) - DELIVERY_COLS)
 
     # ---- Sheet 1: "Audit Summary" — headings + derivable metrics --------------
-    # Layout (updated delivery template): a 3-column grid where column A holds
-    # the metric label, column B the value and column C the details. The title,
-    # footer and section banners are single labels merged across A:C.
-    #   A1 (A1:C1)  -> report title
-    #   A2 (A2:C2)  -> "Standard … | Generated …" footer
-    #   A4 (A4:C4)  -> "COMPLIANCE DASHBOARD" banner
-    #   A5/B5/C5    -> header row: Metric | Value | Details
-    #   A6          -> Course                        (value -> B6, details -> C6)
-    #   A8 (A8:C8)  -> "A. AUDIT RESULTS" section header
-    #   A9          -> Components in Course Section  (not derivable -> cleared)
-    #   A10..A13    -> Defects Found / WCAG 2.1 AA / WCAG 2.2 AA / Best Practice
+    # Layout (delivery template 1.3): a 3-column grid where column B holds the
+    # metric label, column C the value and column D the details. The title,
+    # footer and section banners are single labels merged across B:D.
+    #   B1 (B1:D1)   -> report title
+    #   B2 (B2:D2)   -> "COMPLIANCE DASHBOARD" banner
+    #   B3/C3        -> header row: Metric | Course Name (C3:D3 merged)
+    #   B4 / C4      -> Course                  (value -> C4, C4:D4 merged)
+    #   B5 (B5:D6)   -> "AUDIT RESULTS" section header
+    #   B7 (B7:D7)   -> "Components in Course Section" banner (no value)
+    #   B8..B11      -> Defects Found / WCAG 2.1 AA / WCAG 2.2 AA / Best Practice
+    #                   (value -> C, details -> D)
+    #   B12 (B12:D13)-> "Standard … | Generated …" footer
     summary = next((wb[n] for n in wb.sheetnames
                     if "audit summary" in n.lower() or n.strip().startswith("1")), None)
     if summary is not None:
         m = _summary_metrics(audit)
         title = (title or "").strip() or "WCAG 2.2 AA Accessibility Audit Summary"
         course = (course or "").strip() or "(not specified)"
-        details = (details or "").strip() or f"{m['total']} issue(s) in this delivery"
         sev = m["sev"]
-        # Title (top) and the Standard/Generated footer (just below it).
-        summary["A1"] = title
-        summary["A2"] = (f"Standard: WCAG22AA | Generated: "
-                         f"{_dt.datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        # Map by the label in column A; write Value -> B, Details -> C.
+        # Title (top, B1) and the Standard/Generated footer (bottom, B12).
+        summary["B1"] = title
+        summary["B12"] = (f"Standard: WCAG22AA | Generated: "
+                          f"{_dt.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        # Map by the label in column B; write Value -> C, Details -> D.
         derivable = {
             "defects found": (m["total"],
-                              f"Critical: {sev['Immediate']} | Serious: {sev['High']} "
-                              f"| Moderate: {sev['Medium']} | Minor: {sev['Low']}"),
+                              f"Immediate: {sev['Immediate']} | High: {sev['High']} "
+                              f"| Medium: {sev['Medium']} | Low: {sev['Low']}"),
             "wcag 2.1 aa issues": (m["n21"],
                                    "Fix first — required for both 2.1 AA and 2.2 AA"),
             "wcag 2.2 aa issues": (m["n22"],
                                    "New in 2.2 only — can defer if targeting 2.1 AA first"),
             "best practice issues": (m["best"], "Not WCAG failures but recommended"),
         }
-        # Rows covered by a multi-column merge (title / footer / section banners)
-        # must be left alone — their B/C are read-only MergedCells.
+        # Rows whose label cell (col B) is swallowed by a horizontal merge
+        # starting at column A/B (title / footer / section banners) must be left
+        # alone — their cells are read-only MergedCells. The header and Course
+        # rows merge only from column C (C3:D3, C4:D4), so column B stays its own
+        # writable label cell and these rows are still processed below.
         merged_rows = set()
         for rng in summary.merged_cells.ranges:
-            if rng.max_col > rng.min_col:
+            if rng.max_col > rng.min_col and rng.min_col <= 2:
                 merged_rows.update(range(rng.min_row, rng.max_row + 1))
         for r in range(1, (summary.max_row or 0) + 1):
             if r in merged_rows:
                 continue
-            label = str(summary.cell(r, 1).value or "").strip().lower()  # column A
+            label = str(summary.cell(r, 2).value or "").strip().lower()  # column B
             if not label or label in ("—", "metric"):
                 continue
             if label == "course":
-                summary.cell(r, 2).value = course    # column B
-                summary.cell(r, 3).value = details   # column C
+                # Course name spans the merged C:D cell — write its anchor (C).
+                summary.cell(r, 3).value = course    # column C
                 continue
             hit = next((v for k, v in derivable.items()
                         if label.startswith(k)), None)
             if hit is not None:
-                summary.cell(r, 2).value = hit[0]
+                summary.cell(r, 3).value = hit[0]        # column C
                 if hit[1] is not None:
-                    summary.cell(r, 3).value = hit[1]
+                    summary.cell(r, 4).value = hit[1]    # column D
             else:
-                # Non-derivable metric row (e.g. "Components in Course Section"):
-                # clear the template's example value/details so foreign sample
-                # data is never shipped in a real delivery.
-                summary.cell(r, 2).value = None
+                # Non-derivable metric row: clear the template's example
+                # value/details so foreign sample data is never shipped.
                 summary.cell(r, 3).value = None
+                summary.cell(r, 4).value = None
 
     # ---- Sheet 3: "Component Health" — clear foreign example rows (keep header)
     comp = next((wb[n] for n in wb.sheetnames if "component" in n.lower()), None)
