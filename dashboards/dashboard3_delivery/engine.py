@@ -268,32 +268,90 @@ def _fill_delivery(audit: pl.DataFrame, out: Path, title: str = "",
     from openpyxl import load_workbook
     wb = load_workbook(WCAG_DELIVERY_TEMPLATE)
 
-    # ---- Sheet 2: "All Issues" — map the audit's first 12 columns (A–L)
-    # POSITIONALLY into the template's A–L. The audit's A–L line up with the
-    # delivery A–L; only column C differs in label (audit "Issue Category" vs
-    # template "Issue Type") — same position — so by-name mapping would wrongly
-    # pull the audit's separate "Issue Type" (col R) into C. Positional is right.
-    # (Delivery template 1.3 trimmed sheet 2 from A–P to A–L.)
-    DELIVERY_COLS = 12                            # delivery sheet 2 = A–L only
+    # ---- Sheet 2: "All Issues" — map the audit's leading columns POSITIONALLY
+    # into however many columns the template's sheet 2 actually has. The audit's
+    # columns line up with the delivery columns 1:1 from the left; only column C
+    # differs in label (audit "Issue Category" vs template "Issue Type") — same
+    # position — so by-name mapping would wrongly pull the audit's separate
+    # "Issue Type" (col R) into C. Positional is right.
+    #
+    # The fill width adapts to the template: it is min(template columns, audit
+    # columns), so the sheet works whether the template ships 12 (A–L), 16 (A–P)
+    # or any other number of columns — without deleting any template columns.
     issues = next((wb[n] for n in wb.sheetnames
                    if "all issues" in n.lower() or n.strip().startswith("2")), None)
     if issues is not None:
-        n_tgt = min(issues.max_column or 0, DELIVERY_COLS)
-        src_cols = list(audit.columns)            # 23 audit columns, in order
+        src_cols = list(audit.columns)            # audit columns, in order
+        n_tgt = min(issues.max_column or 0, len(src_cols))
         rows = audit.to_dicts()
         start = 2
         for i, r in enumerate(rows, start=start):
             for j in range(1, n_tgt + 1):
-                val = r.get(src_cols[j - 1]) if j - 1 < len(src_cols) else None
-                issues.cell(row=i, column=j, value=val)
+                issues.cell(row=i, column=j, value=r.get(src_cols[j - 1]))
         # clear any leftover template example rows below the data
         for rr in range(start + len(rows), (issues.max_row or 0) + 1):
             for cc in range(1, (issues.max_column or 0) + 1):
                 issues.cell(rr, cc).value = None
-        # ensure nothing exists beyond column L (12)
-        if (issues.max_column or 0) > DELIVERY_COLS:
-            issues.delete_cols(DELIVERY_COLS + 1,
-                               (issues.max_column or DELIVERY_COLS) - DELIVERY_COLS)
+
+        # Grid: give every DATA cell a four-side border and strip borders from
+        # every empty cell, so the grid bounds exactly the data (no stray
+        # template lines below/around it). The header row (row 1) is left exactly
+        # as the template ships it. "Has data" uses the same emptiness test as
+        # trim_trailing_blank_rows so the two agree.
+        from openpyxl.styles import Border, Side
+        _thin = Side(style="thin")
+        _grid = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
+        _no_border = Border()
+        for rr in range(2, (issues.max_row or 1) + 1):       # skip header row 1
+            for cc in range(1, (issues.max_column or n_tgt) + 1):
+                c = issues.cell(rr, cc)
+                has_data = c.value is not None and str(c.value).strip() != ""
+                c.border = _grid if has_data else _no_border
+        # The template applies a default border to whole COLUMNS and ROWS (via
+        # the column/row dimension styles), so empty cells INHERIT that border
+        # and Excel draws a grid down every column / across rows even where there
+        # is no data. Per-cell clearing can't reach those (infinite) empty cells,
+        # so strip the borderId (StyleArray index 2) from every column/row
+        # default style. Data cells keep their own explicit grid; widths/heights
+        # are untouched.
+        import copy as _copy
+        def _strip_border(dim):
+            sa = getattr(dim, "_style", None)
+            if sa is None:
+                return
+            try:
+                sa = _copy.copy(sa)
+                sa[2] = 0                     # borderId -> 0 (no border)
+                dim._style = sa
+            except Exception:  # noqa: BLE001 — never let cosmetics break export
+                pass
+        for _dim in list(issues.column_dimensions.values()):
+            _strip_border(_dim)
+        for _dim in list(issues.row_dimensions.values()):
+            _strip_border(_dim)
+
+        # Remove the template's conditional-formatting rule that borders a whole
+        # row whenever column A is non-empty (sqref A1:XFD1048576, dxf = thin
+        # box). It draws a grid across the ENTIRE row width — including the empty
+        # columns past the data (Q onward) — and a conditional format overrides
+        # our explicit cell borders, so it must be dropped. Our per-cell grid
+        # above already boxes exactly the data cells.
+        from openpyxl.formatting.formatting import ConditionalFormattingList
+        issues.conditional_formatting = ConditionalFormattingList()
+
+        # Hide Excel's default screen gridlines so the EMPTY cells read as blank
+        # (white) and only the real cell borders drawn above are visible — i.e.
+        # the grid appears solely where the data is.
+        issues.sheet_view.showGridLines = False
+        # The template ships a stray saved view (scrolled to col I, cursor parked
+        # at J400) that every export inherits and that makes the sheet look wrong
+        # on open. Reset it so the sheet opens at the top-left with the header
+        # frozen. Reapply the header freeze AFTER clearing topLeftCell so the
+        # pane's own anchor is rebuilt cleanly.
+        from openpyxl.worksheet.views import Selection
+        issues.sheet_view.topLeftCell = None
+        issues.sheet_view.selection = [Selection(activeCell="A2", sqref="A2")]
+        issues.freeze_panes = "A2"
 
     # ---- Sheet 1: "Audit Summary" — headings + derivable metrics --------------
     # Layout (delivery template 1.3): a 3-column grid where column B holds the
