@@ -1,0 +1,242 @@
+"""Excel reading and writing built on Polars + OpenPyXL + XlsxWriter."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import polars as pl
+
+
+def list_sheets(path: str | Path) -> list[str]:
+    """Return worksheet names for an .xlsx/.xls workbook."""
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".xlsx":
+        from openpyxl import load_workbook
+        wb = load_workbook(path, read_only=True, data_only=True)
+        try:
+            return list(wb.sheetnames)
+        finally:
+            wb.close()
+    # .xls handled by pandas/xlrd path below
+    import pandas as pd
+    xls = pd.ExcelFile(path)
+    return list(xls.sheet_names)
+
+
+def _recover_error_cells(path: Path, sheet, df: pl.DataFrame) -> pl.DataFrame:
+    """Excel error cells (#REF!, #DIV/0!, …) are read as null by the fast
+    engines, so they'd masquerade as blanks. Re-scan with openpyxl and restore
+    the error literal into the frame so downstream checks can flag them.
+
+    Fully guarded: any problem leaves the frame exactly as it was.
+    """
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(path, read_only=True, data_only=True)
+        ws = wb[sheet] if isinstance(sheet, str) and sheet in wb.sheetnames \
+            else (wb.worksheets[sheet] if isinstance(sheet, int) else wb.worksheets[0])
+        cols = df.columns
+        fixes = {}   # col_name -> {row_index: literal}
+        for ridx, row in enumerate(ws.iter_rows(min_row=2)):   # row 1 = header
+            for cidx, cell in enumerate(row):
+                if cell.data_type == "e" and cidx < len(cols) and ridx < df.height:
+                    fixes.setdefault(cols[cidx], {})[ridx] = str(cell.value)
+        wb.close()
+        if not fixes:
+            return df
+        for col, rowmap in fixes.items():
+            series = df.get_column(col).cast(pl.Utf8, strict=False).to_list()
+            for ri, lit in rowmap.items():
+                series[ri] = lit
+            df = df.with_columns(pl.Series(col, series))
+        return df
+    except Exception:  # noqa: BLE001 - never let recovery break a load
+        return df
+
+
+def read_sheet(path: str | Path, sheet: str | int | None = None) -> pl.DataFrame:
+    """Read a single worksheet into a Polars DataFrame."""
+    path = Path(path)
+    suffix = path.suffix.lower()
+    sheet_name = sheet if sheet is not None else 0
+
+    if suffix == ".xlsx":
+        # Polars reads xlsx via the calamine/openpyxl engine.
+        try:
+            df = pl.read_excel(path, sheet_name=sheet if isinstance(sheet, str) else None)
+            return _recover_error_cells(path, sheet if sheet is not None else 0, df)
+        except Exception:  # noqa: BLE001 - fall back to pandas
+            pass
+    import pandas as pd
+    pdf = pd.read_excel(path, sheet_name=sheet_name, dtype=object)
+    pdf = pdf.where(pd.notnull(pdf), None)
+    pdf.columns = [str(c) for c in pdf.columns]
+    data = {col: pdf[col].tolist() for col in pdf.columns}
+    df = pl.DataFrame(data, strict=False)
+    if suffix == ".xlsx":
+        df = _recover_error_cells(path, sheet_name, df)
+    return df
+
+
+def highlight_summary_cells(path: str | Path, sheet_name: str | None = None) -> bool:
+    """Post-process an existing .xlsx: fill any "Summary" cell yellow when its
+    text is longer than 250 characters or contains a line break.
+
+    Works on a workbook produced by ANY writer (xlsxwriter or openpyxl), so it
+    can be applied uniformly to every export that may contain a Summary column.
+    Idempotent; only rewrites the file when something actually changed. The
+    column is matched case-insensitively from the header row; text is never
+    modified or truncated and no other column is touched.
+    """
+    from openpyxl import load_workbook
+    from openpyxl.styles import PatternFill
+
+    path = Path(path)
+    wb = load_workbook(path)
+    fill = PatternFill("solid", fgColor="DCFCE7")
+    changed = False
+    sheets = ([wb[sheet_name]] if sheet_name and sheet_name in wb.sheetnames
+              else list(wb.worksheets))
+    for ws in sheets:
+        summary_cols = [c for c in range(1, ws.max_column + 1)
+                        if str(ws.cell(1, c).value or "").strip().lower() == "summary"]
+        if not summary_cols:
+            continue
+        for r in range(2, ws.max_row + 1):
+            for c in summary_cols:
+                cell = ws.cell(r, c)
+                if cell.value is None:
+                    continue
+                text = str(cell.value)
+                if len(text) > 250 or "\n" in text or "\r\n" in text:
+                    cell.fill = fill
+                    changed = True
+    if changed:
+        wb.save(path)
+    wb.close()
+    return changed
+
+
+def write_excel(df: pl.DataFrame, out_path: str | Path, sheet_name: str = "Sheet1") -> Path:
+    """Write a DataFrame to .xlsx WITHOUT highlighting missing values."""
+    return _write_xlsx(df, out_path, sheet_name, highlight=False)
+
+
+def write_excel_highlighted(df: pl.DataFrame, out_path: str | Path,
+                            sheet_name: str = "Sheet1") -> Path:
+    """Write a DataFrame to .xlsx, highlighting missing/blank cells in blue."""
+    return _write_xlsx(df, out_path, sheet_name, highlight=True)
+
+
+def _write_xlsx(df: pl.DataFrame, out_path: str | Path,
+                sheet_name: str = "Sheet1", highlight: bool = False) -> Path:
+    """Write a DataFrame to .xlsx in the normal layout: column headers on the
+    first row, data below. Every row and column is written.
+
+    A cell counts as "missing" when it is null or an empty/whitespace-only
+    string. When *highlight* is True those cells are filled blue; otherwise the
+    file is written plainly with no extra formatting changes.
+    """
+    from utils.helpers import is_missing
+    out_path = Path(out_path)
+    cols = df.columns
+    # Index of the "Summary" column(s), matched case-insensitively. Only these
+    # cells get the export-time length / newline highlight.
+    summary_idx = {j for j, c in enumerate(cols)
+                   if str(c).strip().lower() == "summary"}
+
+    import xlsxwriter
+    with xlsxwriter.Workbook(str(out_path)) as wb:
+        ws = wb.add_worksheet(sheet_name[:31])
+        # No highlighting: header is plain bold text (no fill), and no
+        # summary/length highlighting is applied to data cells.
+        header_fmt = wb.add_format({"bold": True})
+        missing_fmt = wb.add_format({"bg_color": "#FEE2E2"})
+
+        widths = [len(str(c)) for c in cols]
+        for j, col in enumerate(cols):
+            ws.write(0, j, col, header_fmt)
+
+        for i, row in enumerate(df.iter_rows(), start=1):
+            for j, val in enumerate(row):
+                if is_missing(val):
+                    if highlight:
+                        ws.write_blank(i, j, None, missing_fmt)
+                    # plain: leave the cell empty, no formatting
+                else:
+                    text = str(val)
+                    ws.write(i, j, text)
+                    if len(text) > widths[j]:
+                        widths[j] = len(text)
+
+        for j, w in enumerate(widths):
+            ws.set_column(j, j, min(max(w + 2, 8), 60))
+        ws.freeze_panes(1, 0)
+    return out_path
+
+
+# Light, distinct fills for duplicate groups (cycled). Mirror the on-screen
+# .dup-g0..g7 palette but as soft solid colours that read well in Excel.
+_DUP_GROUP_FILLS = [
+    "FDEBD0", "DCEAFF", "D9F2E0", "FBD9E8",
+    "ECDCF7", "D5F0EC", "FBE2D0", "E2E8F0",
+]
+
+
+def highlight_duplicate_rows(path: str | Path, row_groups, sheet_name=None) -> bool:
+    """Tint each data row by its duplicate-group index using a light palette.
+
+    *row_groups* is a list aligned to the data rows in file order; each entry
+    is a group index (0,1,2,…) or None for a non-duplicate row.
+    """
+    from openpyxl import load_workbook
+    from openpyxl.styles import PatternFill
+
+    if not row_groups:
+        return False
+    path = Path(path)
+    wb = load_workbook(path)
+    fills = [PatternFill("solid", fgColor=c) for c in _DUP_GROUP_FILLS]
+    changed = False
+    ws = (wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames
+          else wb.worksheets[0])
+    max_col = ws.max_column
+    for i, grp in enumerate(row_groups):
+        if grp is None:
+            continue
+        fill = fills[int(grp) % len(fills)]
+        r = i + 2
+        for c in range(1, max_col + 1):
+            ws.cell(r, c).fill = fill
+        changed = True
+    if changed:
+        wb.save(path)
+    wb.close()
+    return changed
+
+
+def trim_trailing_blank_rows(path, sheet_name=None) -> bool:
+    """Delete rows that contain no data so the file's used range ends at the
+    last real row. Removes leftover template / empty rows at the bottom of a
+    downloaded workbook (a row counts as data if any cell is non-empty)."""
+    from openpyxl import load_workbook
+    p = Path(path)
+    try:
+        wb = load_workbook(p)
+    except Exception:  # noqa: BLE001
+        return False
+    targets = ([wb[sheet_name]] if sheet_name and sheet_name in wb.sheetnames
+               else list(wb.worksheets))
+    changed = False
+    for ws in targets:
+        maxr = ws.max_row or 0
+        last = 0
+        for r in range(1, maxr + 1):
+            if any(c.value is not None and str(c.value).strip() != "" for c in ws[r]):
+                last = r
+        if 0 <= last < maxr:
+            ws.delete_rows(last + 1, maxr - last)
+            changed = True
+    if changed:
+        wb.save(p)
+    return changed

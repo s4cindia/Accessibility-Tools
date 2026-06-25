@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environments
+venv/
+.venv/
+
+# Environment Variables
+.env
+
+# TLS material — generated per-server, NEVER commit the private key
+certs/
+**/certs/
+*.key
+*.crt
+
+# Database
+*.db
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+
+# Exports
+exports/*
+!exports/.gitkeep
+
+# Reports
+reports/*
+!reports/.gitkeep
+
+# IDE Files
+.vscode/
+.idea/
+
+# OS Files
+.DS_Store
+Thumbs.db

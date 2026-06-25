@@ -1,0 +1,6 @@
+"""Placeholder 1 (merge axe exports) constants."""
+PAGE_URL = "/merge-axe-excels"
+API_MERGE = "/api/feature/merge-axe"
+API_MERGE_OPEN = "/api/files/merge-open"
+PAGE_TITLE = "Validate /Merge Axe Tool Excels"
+BLUEPRINT_NAME = "merge_axe"

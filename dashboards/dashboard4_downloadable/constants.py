@@ -1,0 +1,5 @@
+"""Placeholder 4 (downloadable audit) constants."""
+PAGE_SLUG = "generate-downloadable-excel"
+PAGE_URL = "/generate-downloadable-excel"
+API_GENERATE = "/api/feature/downloadable"
+BLUEPRINT_NAME = "downloadable_audit"

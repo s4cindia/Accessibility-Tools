@@ -1,0 +1,81 @@
+# Docker Swarm stack for the Accessibility Tools app.
+# Deploy with:  docker stack deploy -c docker-stack.yml accessibility
+#
+# Differences from docker-compose.yml (Swarm ignores several compose keys):
+#   * No `build:` — Swarm only schedules pre-built images. Build & tag first
+#     (see DEPLOY-SWARM.md). On a multi-node swarm the image must be in a
+#     registry every node can pull from.
+#   * No `depends_on` ordering — Swarm starts services in parallel. The app
+#     simply restarts (restart_policy) until Postgres passes its healthcheck.
+#   * `restart:` is replaced by `deploy.restart_policy`.
+#
+# CRITICAL: the `app` service is locked to replicas: 1. The app holds the
+# loaded dataset + undo/redo history in a single in-memory singleton
+# (services/store.py), so a second replica would serve a divergent copy and
+# corrupt sessions. Scale with threads inside the one container, never replicas.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sde}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the deploy shell}
+      POSTGRES_DB: ${POSTGRES_DB:-smart_document_editor}
+    volumes:
+      - sde-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sde} -d ${POSTGRES_DB:-smart_document_editor}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published — only reachable by the app over the overlay network.
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      placement:
+        # Pin to a manager node so its local volume always lands on the same host.
+        constraints:
+          - node.role == manager
+
+  app:
+    # Published by .github/workflows/build-and-publish.yml. Override APP_IMAGE to
+    # pin a specific build, e.g. ghcr.io/s4cindia/accessibility-tools:main-<sha>.
+    image: ${APP_IMAGE:-ghcr.io/s4cindia/accessibility-tools:latest}
+    ports:
+      # Published via the Swarm routing mesh: reachable on any node's IP at :5000.
+      - "5000:5000"
+    environment:
+      SDE_SECRET_KEY: ${SDE_SECRET_KEY:?set SDE_SECRET_KEY in the deploy shell}
+      SDE_DB_URL: "postgresql+psycopg2://${POSTGRES_USER:-sde}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-smart_document_editor}"
+      SDE_DATA_DIR: "/data"
+    volumes:
+      - sde-data:/data
+      - sde-uploads:/app/uploads
+      - sde-exports:/app/exports
+      - sde-reports:/app/reports
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/login').status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      replicas: 1            # DO NOT increase — see note at top of file.
+      restart_policy:
+        condition: any
+        delay: 5s
+      update_config:
+        order: stop-first    # singleton: never run two app tasks at once.
+      placement:
+        # Keep the app on the same node as its volumes (and next to the db).
+        constraints:
+          - node.role == manager
+
+volumes:
+  sde-pgdata:
+  sde-data:
+  sde-uploads:
+  sde-exports:
+  sde-reports:
