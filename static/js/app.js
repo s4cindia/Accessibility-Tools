@@ -1230,9 +1230,9 @@ SDE.actions["export-template"] = async function () {
 
 /* Placeholder 3 (delivery): a delivery audit must already be open. Click opens a
    file picker for a SEPARATE downloadables workbook; its "Counts by Type" sheet
-   (rows 7/8/9 = PDF/PowerPoint/Word) gives the counts, and THREE digital-asset
-   template rows are appended to the end of the loaded dataset with Instances set
-   to those counts. After import, the counts are shown. */
+   (rows 8/9 = PowerPoint/Word) gives the counts, and the digital-asset template
+   rows (Word + PowerPoint) are appended to the end of the loaded dataset with
+   Instances set to those counts. After import, the counts are shown. */
 SDE.actions["import-digital-asset"] = function () {
   if (window.SDE_PAGE_MODE !== "delivery") return;
   if (!SDE.requireData()) return;   // a delivery file must be open first
@@ -1334,14 +1334,14 @@ SDE._doDigitalAssetImport = async function (file, url) {
       Swal.fire({ icon: "success", title: "Digital assets imported",
         html: `<div style="text-align:left;color:#334155;line-height:1.7">`
           + `<b>Counts by Type</b><br>`
-          + `PDF: <b>${c.pdf || 0}</b><br>Word: <b>${c.word || 0}</b><br>`
+          + `Word: <b>${c.word || 0}</b><br>`
           + `PowerPoint: <b>${c.ppt || 0}</b><br><br>`
           + `Added <b>${d.added || 0}</b> row(s) to the end of the loaded sheet`
           + (url ? `, with Issue URL set to <b>${SDE.esc(url)}</b>` : "")
           + ` (Instances set to these counts).</div>`,
         confirmButtonColor: "#4f46e5" });
     }
-    SDE.toast(`Added ${d.added || 0} digital-asset rows — PDF ${c.pdf || 0}, Word ${c.word || 0}, PPT ${c.ppt || 0}`, "success");
+    SDE.toast(`Added ${d.added || 0} digital-asset rows — Word ${c.word || 0}, PPT ${c.ppt || 0}`, "success");
   } catch (e) {
     if (typeof Swal !== "undefined") {
       Swal.fire({ icon: "error", title: "Couldn't import digital asset",

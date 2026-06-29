@@ -13,6 +13,7 @@ front-end calls keep working):
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from flask import Blueprint, request
@@ -851,20 +852,36 @@ def blanks():
     return ok(count=len(out), cells=total_cells, rows=out[:1000], col_names=names)
 
 
-# Placeholder 1 "Alert" — audit component names to watch for in the merged data.
-# Every data cell is scanned (case-insensitive) for these phrases; each hit is
-# reported with its row, column and the matched word.
+# Placeholder 1 "Alert" — component names AND their individual keywords to watch
+# for in the merged data. A warning fires when the FULL component name appears
+# (e.g. "Knowledge Check") and ALSO when any single keyword appears on its own
+# (e.g. "KNOWLEDGE"). The full names are listed first so they read as the
+# primary component, followed by the standalone keywords.
+_ALERT_COMPONENTS = [
+    "Flashcards", "TestPrep", "Knowledge Check", "Math Review Module",
+    "Virtual Mentor Lectures", "Final Exam", "Chapter Quizzes",
+    "Soft-Skill Simulations", "Virtual Patient Cases",
+    "Simulation Training Support and Scenarios",
+]
+_ALERT_KEYWORDS = [
+    "Knowledge", "Check", "Math", "Review", "Module", "Virtual", "Mentor",
+    "Lectures", "Final", "Exam", "Chapter", "Quizzes", "Soft-Skill",
+    "Simulations", "Patient", "Cases", "Simulation", "Training", "Support",
+    "Scenarios",
+]
 ALERT_TERMS = [
-    {"label": "Flashcards",                                "term": "flashcards"},
-    {"label": "TestPrep",                                  "term": "testprep"},
-    {"label": "Knowledge Check",                           "term": "knowledge check"},
-    {"label": "Math Review Module",                        "term": "math review module"},
-    {"label": "Virtual Mentor Lectures",                   "term": "virtual mentor lectures"},
-    {"label": "Final Exam",                                "term": "final exam"},
-    {"label": "Chapter Quizzes",                           "term": "chapter quizzes"},
-    {"label": "Soft-Skill Simulations",                    "term": "soft-skill simulations"},
-    {"label": "Virtual Patient Cases (Simulations)",       "term": "virtual patient cases"},
-    {"label": "Simulation Training Support and Scenarios", "term": "simulation training support and scenarios"},
+    {"label": _w, "term": _w.lower()}
+    for _w in _ALERT_COMPONENTS + _ALERT_KEYWORDS
+]
+# Whole-word, case-insensitive matchers with flexible internal whitespace: a
+# multi-word name matches across single/multiple spaces or line breaks, and a
+# single keyword never fires inside a larger word ('exam' in 'examine', 'support'
+# in 'supported', 'math' in 'mathematics'). Compiled once at import; kept
+# separate from ALERT_TERMS so that list stays JSON-serialisable for the API.
+_ALERT_PATTERNS = [
+    (t, re.compile(r"\b" + r"\s+".join(re.escape(p) for p in t["term"].split())
+                   + r"\b", re.IGNORECASE))
+    for t in ALERT_TERMS
 ]
 
 
@@ -887,9 +904,8 @@ def alert_terms():
             cell = str(raw if raw is not None else "")
             if not cell.strip():
                 continue
-            low = cell.lower()
-            for t in ALERT_TERMS:
-                if t["term"] in low:
+            for t, pat in _ALERT_PATTERNS:
+                if pat.search(cell):
                     hits.append({
                         "id": int(r[ID_COL]),
                         "row": pos,

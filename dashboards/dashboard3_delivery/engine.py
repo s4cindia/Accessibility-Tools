@@ -793,8 +793,10 @@ def build_digital_asset_rows(counts: dict, existing_df: pl.DataFrame,
         row["Description"] = _build_description(row)   # rebuilt from final values
         rows.append({h: row.get(h, "") for h in headers})
 
-    by = {"pdf": int(counts.get("PDF", 0) or 0),
-          "word": int(counts.get("Microsoft Word", 0) or 0),
+    # Report only the counts that are actually appended. The Digital Asset
+    # template ships Word + PowerPoint rows only (no PDF), so PDFs are never
+    # added and are intentionally left out of the reported counts.
+    by = {"word": int(counts.get("Microsoft Word", 0) or 0),
           "ppt": int(counts.get("Microsoft PowerPoint", 0) or 0)}
     new_df = pl.DataFrame(rows, schema={h: pl.Utf8 for h in headers})
     return new_df, by

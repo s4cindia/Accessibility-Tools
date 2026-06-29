@@ -84,10 +84,11 @@ def delivery_prepare():
 @vpat_report_bp.route(C.API_IMPORT_ASSET, methods=["POST"])
 def import_digital_asset():
     """With a delivery audit already loaded, pick a SEPARATE downloadables
-    workbook and read its 'Counts by Type' sheet (rows 7/8/9 = PDF/PowerPoint/
-    Word). Append the three digital-asset template rows to the END of the loaded
-    dataset with Instances set to those counts (ID continues the sequence, Parent
-    inherited, Fix Owner='Vendor', Verified='Pending'). Returns the counts."""
+    workbook and read its 'Counts by Type' sheet (rows 8/9 = PowerPoint/Word).
+    Append the digital-asset template rows (Word + PowerPoint) to the END of the
+    loaded dataset with Instances set to those counts (ID continues the sequence,
+    Parent inherited, Fix Owner='Vendor', Verified='Pending'). Returns the
+    counts. PDFs are intentionally not added."""
     if not store.loaded:
         return fail("Open a delivery workbook first, then import the digital asset.")
     f = request.files.get("file")
@@ -129,7 +130,7 @@ def import_digital_asset():
         return fail(f"Import failed: {exc}")
 
     if new_rows is None or new_rows.height == 0:
-        return fail("The 'Counts by Type' sheet shows 0 PDF, Word and PowerPoint "
+        return fail("The 'Counts by Type' sheet shows 0 Word and PowerPoint "
                     "documents — nothing to add.")
     added = store.append_rows(new_rows, "Import digital asset rows")
     return ok(added=added, counts=used, parent_id=parent_id)
