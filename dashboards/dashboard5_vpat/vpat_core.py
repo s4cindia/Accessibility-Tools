@@ -317,11 +317,21 @@ LEGAL_TEXT = (
 )
 
 
+# Fixed report heading. The title/subtitle are no longer user-editable \u2014 every
+# report uses these exact two lines.
+REPORT_TITLE = "S4Carlisle Accessibility Conformance Report"
+REPORT_SUBTITLE = "WCAG Edition (Based on VPAT\u00ae Version 2.5)"
+# The subtitle prints on two centred lines under the title: the edition, then
+# the VPAT version on its own line below.
+REPORT_SUBTITLE_MAIN = "WCAG Edition"
+REPORT_SUBTITLE_VER = "(Based on VPAT\u00ae Version 2.5)"
+
+
 def default_data():
     """Return a deep-ish copy of the pre-filled Cyber Labs report."""
     return {
-        "title": "JBLearning Accessibility Conformance Report",
-        "subtitle": "WCAG Edition (Based on VPAT\u00ae Version 2.5)",
+        "title": REPORT_TITLE,
+        "subtitle": REPORT_SUBTITLE,
         "product": "Cyber Labs",
         "report_date": "January 2025",
         "description": (
@@ -427,12 +437,18 @@ def export_pdf(data, path):
     s_sub = ParagraphStyle("vs", parent=styles["Normal"], fontName="Helvetica",
                            fontSize=11, textColor=colors.HexColor("#475569"),
                            alignment=TA_CENTER, spaceAfter=14)
+    s_sub_main = ParagraphStyle("vs1", parent=styles["Normal"], fontName="Helvetica-Bold",
+                                fontSize=13, textColor=colors.HexColor("#334155"),
+                                alignment=TA_CENTER, spaceAfter=0)
+    s_sub_ver = ParagraphStyle("vs2", parent=styles["Normal"], fontName="Helvetica",
+                               fontSize=10.5, textColor=colors.HexColor("#475569"),
+                               alignment=TA_CENTER, spaceAfter=0)
     s_h2 = ParagraphStyle("vh2", parent=styles["Heading2"], fontName="Helvetica-Bold",
                           fontSize=13, textColor=NAVY, spaceBefore=14, spaceAfter=6)
     s_label = ParagraphStyle("vlbl", parent=styles["Normal"], fontName="Helvetica-Bold",
-                             fontSize=10, textColor=INK, spaceAfter=2)
+                             fontSize=12, textColor=INK, spaceAfter=2)
     s_body = ParagraphStyle("vbody", parent=styles["Normal"], fontName="Helvetica",
-                            fontSize=10, textColor=INK, leading=14, spaceAfter=8)
+                            fontSize=12, textColor=INK, leading=16, spaceAfter=8)
     s_cell = ParagraphStyle("vcell", parent=styles["Normal"], fontName="Helvetica",
                             fontSize=8.5, textColor=INK, leading=11)
     s_cellb = ParagraphStyle("vcellb", parent=styles["Normal"], fontName="Helvetica-Bold",
@@ -445,20 +461,28 @@ def export_pdf(data, path):
 
     story = []
 
-    # ---- trademark note + title block ----
-    story.append(Paragraph(
-        "\u201cVoluntary Product Accessibility Template\u201d and \u201cVPAT\u201d are registered service "
-        "marks of the Information Technology Industry Council (ITI)", s_small))
-    story.append(Spacer(1, 10))
-    story.append(Paragraph(esc(data["title"]), s_title))
-    story.append(Paragraph(esc(data["subtitle"]), s_sub))
+    # ---- title block (fixed heading). The ITI trademark note now lives in the
+    # page footer, directly above the page number (see `footer` below). The
+    # subtitle prints on two centred lines: "WCAG Edition" then, on the line
+    # below, "(Based on VPAT® Version 2.5)". ----
+    story.append(Paragraph(esc(REPORT_TITLE), s_title))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(esc(REPORT_SUBTITLE_MAIN), s_sub_main))
+    story.append(Spacer(1, 13))                  # one blank line
+    story.append(Paragraph(esc(REPORT_SUBTITLE_VER), s_sub_ver))
+    story.append(Spacer(1, 14))
 
     def field(label, value, link=False):
         story.append(Paragraph(esc(label), s_label))
         story.append(Paragraph(linkify(value) if link else esc(value), s_body))
 
-    field("Name of Product/Version:", data["product"])
-    field("Report Date:", data["report_date"])
+    # "Name of Product/Version: <value>" on one line, then a blank line, then
+    # "Report Date: <value>" on its own line (label and value inline in both).
+    story.append(Paragraph(
+        f'<b>Name of Product/Version:</b> {esc(data["product"])}', s_body))
+    story.append(Spacer(1, 6))                   # one blank line
+    story.append(Paragraph(
+        f'<b>Report Date:</b> {esc(data["report_date"])}', s_body))
     field("Product Description:", data["description"], link=True)
     field("Contact Information:", data["contact"], link=True)
     field("Notes:", data["notes"], link=True)
@@ -549,19 +573,32 @@ def export_pdf(data, path):
         Paragraph(esc(data["legal_text"]), s_body),
     ]))
 
+    _TRADEMARK = ("“Voluntary Product Accessibility Template” and “VPAT” are "
+                  "registered service marks of the Information Technology "
+                  "Industry Council (ITI)")
+
     def footer(canvas, doc):
         canvas.saveState()
-        canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.HexColor("#94a3b8"))
-        canvas.drawCentredString(letter[0] / 2.0, 0.45 * inch,
-                                 "Page %d" % doc.page)
+        # ITI trademark note — only on the FIRST page, just above the page
+        # number (shrunk to fit the text width).
+        if doc.page == 1:
+            tsize = 7.0
+            usable = letter[0] - 1.4 * inch      # page width minus L/R margins
+            while tsize > 5 and canvas.stringWidth(_TRADEMARK, "Helvetica", tsize) > usable:
+                tsize -= 0.5
+            canvas.setFont("Helvetica", tsize)
+            canvas.drawCentredString(letter[0] / 2.0, 0.60 * inch, _TRADEMARK)
+        # Page number on every page.
+        canvas.setFont("Helvetica", 8)
+        canvas.drawCentredString(letter[0] / 2.0, 0.40 * inch, "Page %d" % doc.page)
         canvas.restoreState()
 
     doc = SimpleDocTemplate(
         path, pagesize=letter,
         leftMargin=0.7 * inch, rightMargin=0.7 * inch,
-        topMargin=0.6 * inch, bottomMargin=0.7 * inch,
-        title="%s - %s" % (data["title"], data["product"]),
+        topMargin=0.6 * inch, bottomMargin=0.85 * inch,
+        title="%s - %s" % (REPORT_TITLE, data["product"]),
     )
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     return path

@@ -365,10 +365,12 @@ def analyze():
 
 @vpat_editor_bp.route("/vpat-editor")
 def page():
-    # Start from the JBL report (keeps Standards, Terms, criteria & Legal as
+    # Start from the default report (keeps Standards, Terms, criteria & Legal as
     # sensible defaults) but BLANK the Overview metadata so the user types it.
+    # Title/subtitle are intentionally NOT blanked — they are fixed and no longer
+    # user-editable (see REPORT_TITLE/REPORT_SUBTITLE in vpat_core).
     data = default_data()
-    for k in ("title", "subtitle", "product", "report_date",
+    for k in ("product", "report_date",
               "description", "contact", "notes", "eval_methods"):
         data[k] = ""
     resp = make_response(render_template(
