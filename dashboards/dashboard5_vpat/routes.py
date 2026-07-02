@@ -11,7 +11,8 @@ from flask import (Blueprint, jsonify, make_response, render_template, request, 
 
 from config import config
 from utils import file_utils
-from dashboards.dashboard5_vpat.vpat_core import WCAG_SLUGS, default_data, export_pdf, sc_url
+from dashboards.dashboard5_vpat.vpat_core import (
+    WCAG_SLUGS, default_data, export_docx, export_pdf, sc_url)
 
 log = logging.getLogger("sde.vpat_editor")
 
@@ -407,6 +408,29 @@ def export():
     except Exception as exc:  # noqa: BLE001
         log.exception("VPAT PDF export failed")
         return jsonify({"ok": False, "error": f"PDF export failed: {exc}"}), 400
+    return jsonify({"ok": True, "file": out.name,
+                    "url": f"/download/exports/{out.name}"})
+
+
+@vpat_editor_bp.route("/api/vpat-editor/export-docx", methods=["POST"])
+def export_word():
+    data = request.get_json(force=True, silent=True) or {}
+    if not data.get("level_a") and not data.get("title"):
+        data = default_data()
+    product = re.sub(r"\s+", "_", str(data.get("product", "report")).strip()) or "report"
+    stem = file_utils.safe_filename(
+        f"VPAT_{product}_{datetime.datetime.now():%Y%m%d_%H%M%S}").replace(" ", "_")
+    out = (file_utils.session_subdir(config.export_dir) / f"{stem}.docx")
+    try:
+        export_docx(data, str(out))
+    except ImportError:
+        return jsonify({"ok": False, "error": (
+            "Word export needs the 'python-docx' package, which isn't installed. "
+            "Run:  pip install python-docx  (or  pip install -r requirements.txt)  "
+            "then restart the app.")}), 400
+    except Exception as exc:  # noqa: BLE001
+        log.exception("VPAT Word export failed")
+        return jsonify({"ok": False, "error": f"Word export failed: {exc}"}), 400
     return jsonify({"ok": True, "file": out.name,
                     "url": f"/download/exports/{out.name}"})
 

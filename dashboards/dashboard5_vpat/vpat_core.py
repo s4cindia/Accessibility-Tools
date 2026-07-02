@@ -386,6 +386,7 @@ def export_pdf(data, path):
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from reportlab.platypus import (
         SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether,
+        PageBreak,
     )
     from xml.sax.saxutils import escape as _esc
     import re as _re
@@ -484,7 +485,9 @@ def export_pdf(data, path):
     story.append(Paragraph(
         f'<b>Report Date:</b> {esc(data["report_date"])}', s_body))
     field("Product Description:", data["description"], link=True)
-    field("Contact Information:", data["contact"], link=True)
+    # "Contact Information: <value>" on a single line (label and value inline).
+    story.append(Paragraph(
+        f'<b>Contact Information:</b> {linkify(data["contact"])}', s_body))
     field("Notes:", data["notes"], link=True)
 
     story.append(Paragraph("Evaluation Methods Used:", s_label))
@@ -562,6 +565,9 @@ def export_pdf(data, path):
         elems.append(tbl)
         return elems
 
+    # Table 1 always begins on a fresh page (keeps the overview/terms section
+    # and the success-criteria tables cleanly separated).
+    story.append(PageBreak())
     story += build_criteria_table("Table 1: Success Criteria, Level A", data["level_a"])
     story += build_criteria_table("Table 2: Success Criteria, Level AA", data["level_aa"])
     story += build_criteria_table("Table 3: Success Criteria, Level AAA", data["level_aaa"])
@@ -601,4 +607,275 @@ def export_pdf(data, path):
         title="%s - %s" % (REPORT_TITLE, data["product"]),
     )
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    return path
+
+
+# ===========================================================================
+# WORD EXPORT (python-docx) — mirrors the PDF layout so users can download the
+# finished report as an editable .docx as well as a PDF.
+# ===========================================================================
+
+def export_docx(data, path):
+    import re as _re
+    from docx import Document
+    from docx.shared import Pt, RGBColor, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    _URL_RE = _re.compile(r'(https?://[^\s<>"\')]+)')
+    _EMAIL_RE = _re.compile(r'([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})')
+
+    NAVY = RGBColor(0x1E, 0x3A, 0x5F)
+    INK = RGBColor(0x1F, 0x29, 0x37)
+    LINK_RGB = RGBColor(0x1D, 0x4E, 0xD8)
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+
+    def _shade(cell, hex_fill):
+        """Set a table cell's background colour (hex without '#')."""
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), hex_fill)
+        tcPr.append(shd)
+
+    def _add_hyperlink(paragraph, url, text):
+        """Append a clickable hyperlink run to a paragraph."""
+        part = paragraph.part
+        r_id = part.relate_to(
+            url,
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+            is_external=True)
+        hyper = OxmlElement("w:hyperlink")
+        hyper.set(qn("r:id"), r_id)
+        new_run = OxmlElement("w:r")
+        rPr = OxmlElement("w:rPr")
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "1D4ED8")
+        rPr.append(color)
+        u = OxmlElement("w:u")
+        u.set(qn("w:val"), "single")
+        rPr.append(u)
+        new_run.append(rPr)
+        t = OxmlElement("w:t")
+        t.set(qn("xml:space"), "preserve")
+        t.text = text
+        new_run.append(t)
+        hyper.append(new_run)
+        paragraph._p.append(hyper)
+
+    def _add_linked_text(paragraph, text, size=12, bold=False, color=INK):
+        """Add text to a paragraph, turning URLs and emails into hyperlinks.
+        Newlines become line breaks within the paragraph."""
+        text = str(text or "")
+        # tokenise into (kind, value): url / email / plain
+        tokens = []
+        last = 0
+        for m in _URL_RE.finditer(text):
+            if m.start() > last:
+                tokens.append(("plain", text[last:m.start()]))
+            url = m.group(1)
+            trail = ""
+            while url and url[-1] in ".,;:)]":
+                trail = url[-1] + trail
+                url = url[:-1]
+            tokens.append(("url", url))
+            if trail:
+                tokens.append(("plain", trail))
+            last = m.end()
+        tokens.append(("plain", text[last:]))
+
+        def _emit_plain(chunk):
+            # inside plain chunks, still linkify emails
+            elast = 0
+            for em in _EMAIL_RE.finditer(chunk):
+                if em.start() > elast:
+                    _emit_run(chunk[elast:em.start()])
+                _add_hyperlink(paragraph, "mailto:" + em.group(1), em.group(1))
+                elast = em.end()
+            if elast < len(chunk):
+                _emit_run(chunk[elast:])
+
+        def _emit_run(chunk):
+            parts = chunk.split("\n")
+            for i, seg in enumerate(parts):
+                if i:
+                    paragraph.add_run().add_break()
+                if seg:
+                    run = paragraph.add_run(seg)
+                    run.font.size = Pt(size)
+                    run.font.bold = bold
+                    run.font.color.rgb = color
+
+        for kind, val in tokens:
+            if kind == "url":
+                _add_hyperlink(paragraph, val, val)
+            else:
+                _emit_plain(val)
+
+    def _para(text="", size=12, bold=False, color=INK, align=None,
+              space_after=8):
+        p = doc.add_paragraph()
+        if align is not None:
+            p.alignment = align
+        p.paragraph_format.space_after = Pt(space_after)
+        if text:
+            run = p.add_run(text)
+            run.font.size = Pt(size)
+            run.font.bold = bold
+            run.font.color.rgb = color
+        return p
+
+    def _heading(text):
+        p = _para(text, size=13, bold=True, color=NAVY, space_after=6)
+        p.paragraph_format.space_before = Pt(14)
+        return p
+
+    def _label_value(label, value, link=False):
+        """'Label: value' with the label bold and the value inline."""
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(8)
+        run = p.add_run(label + " ")
+        run.font.size = Pt(12)
+        run.font.bold = True
+        run.font.color.rgb = INK
+        if link:
+            _add_linked_text(p, value, size=12)
+        else:
+            r = p.add_run(str(value or ""))
+            r.font.size = Pt(12)
+            r.font.color.rgb = INK
+        return p
+
+    doc = Document()
+    section = doc.sections[0]
+    section.left_margin = Inches(0.7)
+    section.right_margin = Inches(0.7)
+    section.top_margin = Inches(0.6)
+    section.bottom_margin = Inches(0.85)
+
+    # ---- title block ----
+    _para(REPORT_TITLE, size=18, bold=True, color=NAVY,
+          align=WD_ALIGN_PARAGRAPH.CENTER, space_after=6)
+    _para(REPORT_SUBTITLE_MAIN, size=13, bold=True,
+          color=RGBColor(0x33, 0x41, 0x55),
+          align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
+    _para(REPORT_SUBTITLE_VER, size=10.5, color=RGBColor(0x47, 0x55, 0x69),
+          align=WD_ALIGN_PARAGRAPH.CENTER, space_after=14)
+
+    # ---- overview fields (labels + values inline where the PDF is inline) ----
+    _label_value("Name of Product/Version:", data["product"])
+    _label_value("Report Date:", data["report_date"])
+    _para("Product Description:", size=12, bold=True, space_after=2)
+    _add_linked_text(_para(space_after=8), data["description"])
+    # "Contact Information: <value>" on a single line.
+    _label_value("Contact Information:", data["contact"], link=True)
+    _para("Notes:", size=12, bold=True, space_after=2)
+    _add_linked_text(_para(space_after=8), data["notes"])
+
+    _para("Evaluation Methods Used:", size=12, bold=True, space_after=2)
+    methods = [m.strip() for m in data["eval_methods"].splitlines() if m.strip()]
+    for m in methods:
+        bp = doc.add_paragraph(style="List Bullet")
+        bp.paragraph_format.space_after = Pt(2)
+        _add_linked_text(bp, m, size=12)
+
+    # ---- applicable standards ----
+    _heading("Applicable Standards/Guidelines")
+    _para("This report covers the degree of conformance for the following "
+          "accessibility standard/guidelines:", size=12)
+    ver_names = {"2.0": "Web Content Accessibility Guidelines 2.0",
+                 "2.1": "Web Content Accessibility Guidelines 2.1",
+                 "2.2": "Web Content Accessibility Guidelines 2.2"}
+    std_tbl = doc.add_table(rows=1, cols=2)
+    std_tbl.style = "Table Grid"
+    std_tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+    hdr = std_tbl.rows[0].cells
+    for cell, label in zip(hdr, ("Standard/Guideline", "Included In Report")):
+        _shade(cell, "1E3A5F")
+        cp = cell.paragraphs[0]
+        run = cp.add_run(label)
+        run.font.bold = True
+        run.font.size = Pt(9)
+        run.font.color.rgb = WHITE
+    for ver in ["2.0", "2.1", "2.2"]:
+        st = data["standards"][ver]
+        row = std_tbl.add_row().cells
+        r0 = row[0].paragraphs[0].add_run(ver_names[ver])
+        r0.font.bold = True
+        r0.font.size = Pt(8.5)
+        inc = f"Level A ({st['A']})\nLevel AA ({st['AA']})\nLevel AAA ({st['AAA']})"
+        cp = row[1].paragraphs[0]
+        for i, line in enumerate(inc.split("\n")):
+            if i:
+                cp.add_run().add_break()
+            cp.add_run(line).font.size = Pt(8.5)
+
+    # ---- terms ----
+    _heading("Terms")
+    _para("The terms used in the Conformance Level information are defined as "
+          "follows:", size=12)
+    for term, definition in data["terms"]:
+        bp = doc.add_paragraph(style="List Bullet")
+        bp.paragraph_format.space_after = Pt(2)
+        r = bp.add_run(term + ": ")
+        r.font.bold = True
+        r.font.size = Pt(12)
+        bp.add_run(definition).font.size = Pt(12)
+
+    _para("Note: When reporting on conformance with the WCAG 2.x Success "
+          "Criteria, they are scoped for full pages, complete processes, and "
+          "accessibility-supported ways of using technology as documented in "
+          "the WCAG 2.0 Conformance Requirements.", size=12)
+
+    # ---- success-criteria tables ----
+    def build_criteria_table(title, rows):
+        _heading(title)
+        tbl = doc.add_table(rows=1, cols=3)
+        tbl.style = "Table Grid"
+        tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+        widths = (Inches(2.45), Inches(1.35), Inches(3.0))
+        hdr = tbl.rows[0].cells
+        for cell, label, w in zip(
+                hdr, ("Criteria", "Conformance Level",
+                      "Remarks and Explanations"), widths):
+            cell.width = w
+            _shade(cell, "1E3A5F")
+            run = cell.paragraphs[0].add_run(label)
+            run.font.bold = True
+            run.font.size = Pt(9)
+            run.font.color.rgb = WHITE
+        for crit, conf, remarks in rows:
+            cells = tbl.add_row().cells
+            for cell, w in zip(cells, widths):
+                cell.width = w
+            # criteria (linked to W3C when known)
+            cp = cells[0].paragraphs[0]
+            url = sc_url(crit)
+            if url:
+                _add_hyperlink(cp, url, str(crit))
+            else:
+                r = cp.add_run(str(crit))
+                r.font.bold = True
+                r.font.size = Pt(8.5)
+            # conformance level, shaded by status
+            bg_hex, _ = CONFORMANCE_COLORS.get(conf, CONFORMANCE_COLORS[""])
+            _shade(cells[1], bg_hex.lstrip("#"))
+            cells[1].paragraphs[0].add_run(str(conf or "")).font.size = Pt(8.5)
+            # remarks (linkified)
+            _add_linked_text(cells[2].paragraphs[0], remarks, size=8.5)
+
+    # Table 1 always begins on a fresh page.
+    doc.add_page_break()
+    build_criteria_table("Table 1: Success Criteria, Level A", data["level_a"])
+    build_criteria_table("Table 2: Success Criteria, Level AA", data["level_aa"])
+    build_criteria_table("Table 3: Success Criteria, Level AAA", data["level_aaa"])
+
+    # ---- legal ----
+    _heading(data["legal_title"])
+    _add_linked_text(_para(space_after=8), data["legal_text"])
+
+    doc.save(path)
     return path
