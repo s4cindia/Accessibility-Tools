@@ -99,6 +99,21 @@ def load_tabular(path: Path, sheet: str | None = None, max_cols: int = 18,
         source = "csv"
     else:
         raise ValueError(f"Unsupported tabular type: {ext}")
+    # Some source files carry a carriage return as the OOXML escape "_x000D_",
+    # which Excel readers return as the literal 7 characters (they don't reverse
+    # it) — so it would show verbatim in the editor grid. Normalise line endings
+    # on every load: strip any literal "_x000D_" escape, then collapse "\r\n"/"\r"
+    # to "\n". Only line-ending characters change; rows/columns/counts/order are
+    # untouched (nulls and non-string cells pass through), and it is idempotent.
+    if df.width:
+        import polars as _pl
+        df = df.with_columns(
+            _pl.col(_pl.Utf8)
+            .str.replace_all("_x000D_", "", literal=True)
+            .str.replace_all("_x000d_", "", literal=True)
+            .str.replace_all("\r\n", "\n", literal=True)
+            .str.replace_all("\r", "\n", literal=True)
+        )
     # Placeholder 3 only accepts the audit format (A–W). Validate the RAW header
     # row (before any column trimming) and reject anything that doesn't match.
     if validate_audit:

@@ -14,7 +14,7 @@ import polars as pl
 
 from config import config
 from services import export_service as _ex
-from services.excel_service import read_sheet
+from services.excel_service import normalize_xlsx_text, read_sheet
 
 from services.feature_service import (
     TEMPLATE_DIR, WCAG_TEMPLATE, WCAG_DELIVERY_TEMPLATE, DIGITAL_ASSET_TEMPLATE,
@@ -374,7 +374,7 @@ def _fill_delivery(audit: pl.DataFrame, out: Path, title: str = "",
         course = (course or "").strip() or "(not specified)"
         sev = m["sev"]
         # Title (top, B1) and the Standard/Generated footer (bottom, B12).
-        summary["B1"] = title
+        summary["B1"] = normalize_xlsx_text(title)
         summary["B12"] = (f"Standard: WCAG22AA | Generated: "
                           f"{_dt.datetime.now().strftime('%Y-%m-%d %H:%M')}")
         # Map by the label in column B; write Value -> C, Details -> D.
@@ -405,7 +405,7 @@ def _fill_delivery(audit: pl.DataFrame, out: Path, title: str = "",
                 continue
             if label == "course":
                 # Course name spans the merged C:D cell — write its anchor (C).
-                summary.cell(r, 3).value = course    # column C
+                summary.cell(r, 3).value = normalize_xlsx_text(course)    # column C
                 continue
             hit = next((v for k, v in derivable.items()
                         if label.startswith(k)), None)
@@ -477,7 +477,7 @@ def _fill_template(audit: pl.DataFrame, out: Path, template: Path = WCAG_TEMPLAT
     start = header_row + 1
     for i, row in enumerate(audit.iter_rows(), start=start):
         for j, val in enumerate(row, start=1):
-            ws.cell(row=i, column=j, value=val)
+            ws.cell(row=i, column=j, value=normalize_xlsx_text(val))
     wb.save(out)
     # Remove any pre-formatted blank rows left below the data on the issues sheet.
     from services.excel_service import trim_trailing_blank_rows
@@ -865,7 +865,8 @@ def _write_vpat_workbook(out: Path, summary_rows: list[dict],
         s.merge_range(0, 0, 0, 1, "Product Accessibility Report — Summary", title)
         s.write(2, 0, "Metric", hdr); s.write(2, 1, "Value", hdr)
         for i, row in enumerate(summary_rows, start=3):
-            s.write(i, 0, row["Metric"], cell); s.write(i, 1, row["Value"], cell)
+            s.write(i, 0, normalize_xlsx_text(row["Metric"]), cell)
+            s.write(i, 1, normalize_xlsx_text(row["Value"]), cell)
         s.set_column(0, 0, 34); s.set_column(1, 1, 16)
         v = wb.add_worksheet("VPAT")
         cols = ["Criteria", "Conformance Level", "Issue Count", "Remarks and Explanations"]
@@ -875,7 +876,7 @@ def _write_vpat_workbook(out: Path, summary_rows: list[dict],
             v.write(2, j, c, hdr)
         for i, row in enumerate(vpat_rows, start=3):
             for j, c in enumerate(cols):
-                v.write(i, j, row.get(c, ""), cell)
+                v.write(i, j, normalize_xlsx_text(row.get(c, "")), cell)
         v.set_column(0, 0, 26); v.set_column(1, 1, 20)
         v.set_column(2, 2, 12); v.set_column(3, 3, 70)
         v.freeze_panes(3, 0)

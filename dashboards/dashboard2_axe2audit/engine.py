@@ -14,7 +14,7 @@ import polars as pl
 
 from config import config
 from services import export_service as _ex
-from services.excel_service import read_sheet
+from services.excel_service import normalize_xlsx_text, read_sheet
 
 from services.feature_service import (
     TEMPLATE_DIR, WCAG_TEMPLATE, WCAG_DELIVERY_TEMPLATE, WCAG_TAGS,
@@ -521,7 +521,7 @@ def axe_to_audit(path: str | Path, sheet: str | None = None,
 
         for out_col, value in cells.items():
             cell = out_ws[f"{out_col}{out_row}"]
-            cell.value = value
+            cell.value = normalize_xlsx_text(value)
             if out_col == "T":
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
 

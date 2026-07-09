@@ -6,6 +6,25 @@ from pathlib import Path
 import polars as pl
 
 
+def normalize_xlsx_text(value):
+    """Normalise line endings for an .xlsx string cell so no carriage return
+    reaches the writer.
+
+    XlsxWriter/openpyxl encode U+000D (\\r) in cell text as the OOXML escape
+    "_x000D_"; desktop Excel/LibreOffice reverse it, but some readers (Excel for
+    iPad, Numbers, Google Sheets, grid viewers) show the literal 7 characters. A
+    plain "\\n" is never escaped and renders cleanly everywhere.
+
+    Non-strings pass through unchanged. Idempotent: any pre-existing literal
+    "_x000D_" escape is stripped first, so re-running on already-fixed text is a
+    no-op. Only line-ending characters are affected; no other text changes.
+    """
+    if isinstance(value, str):
+        return (value.replace("_x000D_", "").replace("_x000d_", "")
+                .replace("\r\n", "\n").replace("\r", "\n"))
+    return value
+
+
 def list_sheets(path: str | Path) -> list[str]:
     """Return worksheet names for an .xlsx/.xls workbook."""
     path = Path(path)
@@ -165,7 +184,7 @@ def _write_xlsx(df: pl.DataFrame, out_path: str | Path,
                     # plain: leave the cell empty, no formatting
                 else:
                     text = str(val)
-                    ws.write(i, j, text)
+                    ws.write(i, j, normalize_xlsx_text(text))
                     if len(text) > widths[j]:
                         widths[j] = len(text)
 

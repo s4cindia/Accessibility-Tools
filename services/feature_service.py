@@ -26,7 +26,7 @@ import polars as pl
 
 from config import config
 from services import export_service as _ex
-from services.excel_service import read_sheet
+from services.excel_service import normalize_xlsx_text, read_sheet
 
 # Where an optional audit template can be dropped in to enable template output.
 TEMPLATE_DIR = config.data_dir / "templates"
@@ -110,9 +110,15 @@ def _slug(text: str) -> str:
 
 def _preview(df: pl.DataFrame, limit: int = 200) -> dict:
     head = df.head(limit)
+    # Some source files carry the OOXML escape "_x000D_" as literal text (Excel
+    # readers don't reverse it), which would otherwise show verbatim in the
+    # preview. Normalise line endings for DISPLAY only — the underlying frame,
+    # de-duplication, counts and column ordering are untouched.
+    rows = [{k: normalize_xlsx_text(v) for k, v in row.items()}
+            for row in head.to_dicts()]
     return {
         "columns": head.columns,
-        "rows": head.to_dicts(),
+        "rows": rows,
         "total": df.height,
         "shown": head.height,
     }

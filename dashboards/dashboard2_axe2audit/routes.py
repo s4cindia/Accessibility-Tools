@@ -116,6 +116,7 @@ def axe2excel_verify_save():
     ALLOWED_COLS = {"G", "C", "D"}
     try:
         from openpyxl import load_workbook
+        from services.excel_service import normalize_xlsx_text
         wb = load_workbook(target)
         ws = wb[sheet] if sheet and sheet in wb.sheetnames else wb.active
         saved = 0
@@ -128,7 +129,7 @@ def axe2excel_verify_save():
             if col not in ALLOWED_COLS or row < 2:
                 continue
             val = e.get("value")
-            ws[f"{col}{row}"].value = ("" if val is None else str(val))
+            ws[f"{col}{row}"].value = normalize_xlsx_text("" if val is None else str(val))
             saved += 1
         wb.save(target)
         wb.close()

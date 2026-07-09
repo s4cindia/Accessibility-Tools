@@ -11,7 +11,7 @@ import polars as pl
 
 from config import config
 from services import analytics_service, validation_service
-from services.excel_service import write_excel
+from services.excel_service import normalize_xlsx_text, write_excel
 from utils.helpers import data_columns, rows_to_records
 
 _TS = lambda: _dt.datetime.now().strftime("%Y%m%d_%H%M%S")  # noqa: E731
@@ -287,7 +287,7 @@ def _report_excel(df: pl.DataFrame, kind: str, stem: str) -> Path:
                 ws.write(0, j, col, header_fmt)
             for i, row in enumerate(sheet_df.iter_rows(), start=1):
                 for j, val in enumerate(row):
-                    ws.write(i, j, "" if val is None else str(val))
+                    ws.write(i, j, normalize_xlsx_text("" if val is None else str(val)))
     return out
 
 
